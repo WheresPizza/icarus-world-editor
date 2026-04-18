@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ICARUS Prospect Editor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.icarus-prospect-editor",
   "build": {
     "frontendDist": "../dist",
@@ -37,6 +37,7 @@
       "icons/icon.ico"
     ],
     "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper" },
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false,

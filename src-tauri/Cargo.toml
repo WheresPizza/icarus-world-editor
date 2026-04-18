@@ -1,8 +1,8 @@
 [package]
 name = "icarus-prospect-editor"
-version = "0.1.0"
+version = "0.1.1"
 description = "ICARUS Prospect File Manager and Editor"
-authors = ["you"]
+authors = ["WheresPizza"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.77.2"
