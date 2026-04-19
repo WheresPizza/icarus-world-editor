@@ -1,6 +1,6 @@
 [package]
 name = "icarus-prospect-editor"
-version = "0.1.4"
+version = "0.1.5"
 description = "ICARUS Prospect File Manager and Editor"
 authors = ["WheresPizza"]
 license = "MIT"
