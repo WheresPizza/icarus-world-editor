@@ -32,6 +32,38 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Download WebView2 Fixed Version Runtime (x64)
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          # Pinned WebView2 runtime version. Bump periodically to pick up security fixes.
+          $version = "140.0.3485.94"
+          $url = "https://www.nuget.org/api/v2/package/WebView2.Runtime.X64/$version"
+          Write-Host "Downloading WebView2 Fixed Runtime $version from $url"
+          Invoke-WebRequest -Uri $url -OutFile wv2.nupkg -UseBasicParsing
+
+          New-Item -ItemType Directory -Force -Path wv2-extracted | Out-Null
+          Expand-Archive -Path wv2.nupkg -DestinationPath wv2-extracted -Force
+
+          # Locate the folder that contains msedgewebview2.exe - this is the runtime root we need.
+          $exe = Get-ChildItem -Path wv2-extracted -Recurse -Filter msedgewebview2.exe |
+                 Select-Object -First 1
+          if (-not $exe) { throw "msedgewebview2.exe not found in extracted package" }
+          $runtimeRoot = $exe.Directory.FullName
+          Write-Host "Runtime root detected: $runtimeRoot"
+
+          New-Item -ItemType Directory -Force -Path webview2-runtime | Out-Null
+          Copy-Item -Path (Join-Path $runtimeRoot '*') -Destination webview2-runtime -Recurse -Force
+
+          Remove-Item -Recurse -Force wv2-extracted
+          Remove-Item -Force wv2.nupkg
+
+          # Sanity check
+          if (-not (Test-Path webview2-runtime/msedgewebview2.exe)) {
+            throw "webview2-runtime/msedgewebview2.exe missing after extraction"
+          }
+          Get-ChildItem webview2-runtime | Select-Object -First 5 Name, Length
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -39,6 +71,6 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "ICARUS Prospect Editor ${{ github.ref_name }}"
-          releaseBody: "Download the .exe installer below to install, or the .msi for a standard Windows installer."
+          releaseBody: "Download the .exe installer below to install. WebView2 runtime and MSVC CRT are bundled — no additional downloads required at install time."
           releaseDraft: true
           prerelease: false

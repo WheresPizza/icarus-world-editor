@@ -73,6 +73,14 @@ src-tauri/
 - **Backend:** Rust + Tauri 2 with `tauri-plugin-fs`, `tauri-plugin-dialog`, `tauri-plugin-log`
 - **Parser:** Custom UE4 property reader/writer (no external UE4 dependency) over `flate2` + `byteorder`
 
+## Troubleshooting
+
+**The app won't open on Windows.** Grab the log folder and open an issue:
+
+1. Press `Win + R`, paste `%APPDATA%\ICARUS Prospect Editor\logs`, press Enter
+2. Zip the folder
+3. Open an issue at [github.com/WheresPizza/icarus-world-editor/issues](https://github.com/WheresPizza/icarus-world-editor/issues) and attach the zip
+
 ## Disclaimer
 
 This is an unofficial community tool. **ICARUS** is a trademark of RocketWerkz. This project is not affiliated with, endorsed by, or supported by RocketWerkz in any way.

@@ -2,3 +2,6 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+
+# Bundled WebView2 Fixed Runtime — downloaded by CI, not committed
+/webview2-runtime/
