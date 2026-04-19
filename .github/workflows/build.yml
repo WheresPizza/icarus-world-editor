@@ -36,9 +36,13 @@ jobs:
         shell: pwsh
         working-directory: src-tauri
         run: |
-          # Pinned WebView2 runtime version. Bump periodically to pick up security fixes.
-          $version = "140.0.3485.94"
-          $url = "https://www.nuget.org/api/v2/package/WebView2.Runtime.X64/$version"
+          # Resolve the latest published version from NuGet's flat-container index,
+          # so we don't rot on a hardcoded pin that later gets unlisted.
+          $ErrorActionPreference = "Stop"
+          $index = Invoke-RestMethod -Uri "https://api.nuget.org/v3-flatcontainer/webview2.runtime.x64/index.json" -UseBasicParsing
+          $version = $index.versions | Select-Object -Last 1
+          if (-not $version) { throw "Could not resolve latest WebView2.Runtime.X64 version from NuGet index" }
+          $url = "https://api.nuget.org/v3-flatcontainer/webview2.runtime.x64/$version/webview2.runtime.x64.$version.nupkg"
           Write-Host "Downloading WebView2 Fixed Runtime $version from $url"
           Invoke-WebRequest -Uri $url -OutFile wv2.nupkg -UseBasicParsing
 
