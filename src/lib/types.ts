@@ -127,6 +127,25 @@ export interface InventoryView {
   components: InventoryComponent[];
 }
 
+// Server management
+export type ServerStatusEnum = "Stopped" | "Starting" | "Running";
+
+export interface ServerConfig {
+  executable_path: string | null;
+  server_name: string;
+  port: number;
+  max_players: number;
+  password: string | null;
+  admin_password: string | null;
+}
+
+export interface ServerStatusResponse {
+  status: ServerStatusEnum;
+  pid: number | null;
+  uptime_secs: number | null;
+  log_lines: string[];
+}
+
 // View state
 export type ViewMode = "library" | "detail" | "component";
 

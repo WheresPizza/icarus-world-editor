@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::State;
+
+use crate::server;
 
 use crate::prospect::backup;
 use crate::prospect::diff;
@@ -25,6 +27,7 @@ pub struct SearchHit {
 
 pub struct AppState {
     pub config: AppConfig,
+    pub server_config: server::ServerConfig,
     pub open_prospects: HashMap<String, OpenProspect>,
 }
 
@@ -972,5 +975,80 @@ fn property_value_to_string(value: &PropertyValue) -> String {
         PropertyValue::Array { inner_type, .. } => format!("[Array:{}]", inner_type),
         PropertyValue::Map { key_type, value_type, .. } => format!("{{Map:{}->{}}}", key_type, value_type),
         PropertyValue::Raw { prop_type, .. } => format!("[Raw:{}]", prop_type),
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// Server Management
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn detect_server() -> Option<String> {
+    server::steam::detect_server_exe()
+}
+
+#[tauri::command]
+pub fn get_server_config(
+    state: State<'_, Mutex<AppState>>,
+) -> server::ServerConfig {
+    state.lock().unwrap().server_config.clone()
+}
+
+#[tauri::command]
+pub fn set_server_config(
+    config: server::ServerConfig,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    state.lock().unwrap().server_config = config;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn start_server(
+    prospect_id: String,
+    state: State<'_, Mutex<AppState>>,
+    server_state: State<'_, Arc<Mutex<server::ServerState>>>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let (exe_path, config) = {
+        let state = state.lock().unwrap();
+        let exe = state
+            .server_config
+            .executable_path
+            .clone()
+            .or_else(|| server::steam::detect_server_exe())
+            .ok_or_else(|| {
+                "Server executable not found. Install ICARUS Dedicated Server via Steam."
+                    .to_string()
+            })?;
+        (exe, state.server_config.clone())
+    };
+
+    server::launcher::start_server(
+        &config,
+        &exe_path,
+        &prospect_id,
+        Arc::clone(server_state.inner()),
+        app_handle,
+    )
+}
+
+#[tauri::command]
+pub fn stop_server(
+    server_state: State<'_, Arc<Mutex<server::ServerState>>>,
+) -> Result<(), String> {
+    server::launcher::stop_server(Arc::clone(server_state.inner()))
+}
+
+#[tauri::command]
+pub fn get_server_status(
+    server_state: State<'_, Arc<Mutex<server::ServerState>>>,
+) -> server::ServerStatusResponse {
+    let state = server_state.lock().unwrap();
+    server::ServerStatusResponse {
+        status: state.status.clone(),
+        pid: state.pid,
+        uptime_secs: state.start_time.map(|t| t.elapsed().as_secs()),
+        log_lines: state.log_lines.clone(),
     }
 }

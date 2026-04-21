@@ -9,6 +9,8 @@ import type {
   SearchHit,
   ProspectDiff,
   InventoryView,
+  ServerConfig,
+  ServerStatusResponse,
 } from "./types";
 
 export async function listProspects(dir: string): Promise<ProspectSummary[]> {
@@ -139,4 +141,28 @@ export async function addInventoryItem(
   quantity: number
 ): Promise<void> {
   return invoke("add_inventory_item", { prospectId, componentIdx, itemKey, quantity });
+}
+
+export async function detectServer(): Promise<string | null> {
+  return invoke("detect_server");
+}
+
+export async function getServerConfig(): Promise<ServerConfig> {
+  return invoke("get_server_config");
+}
+
+export async function setServerConfig(config: ServerConfig): Promise<void> {
+  return invoke("set_server_config", { config });
+}
+
+export async function startServer(prospectId: string): Promise<void> {
+  return invoke("start_server", { prospectId });
+}
+
+export async function stopServer(): Promise<void> {
+  return invoke("stop_server");
+}
+
+export async function getServerStatus(): Promise<ServerStatusResponse> {
+  return invoke("get_server_status");
 }

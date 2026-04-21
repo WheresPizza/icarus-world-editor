@@ -15,6 +15,7 @@
   import ComponentList from "./lib/components/ComponentList.svelte";
   import PropertyTree from "./lib/components/PropertyTree.svelte";
   import InventoryEditor from "./lib/components/InventoryEditor.svelte";
+  import ServerPanel from "./lib/components/ServerPanel.svelte";
   import type { ProspectDiff } from "./lib/types";
 
   // State
@@ -394,6 +395,7 @@
         <div class="detail-panels">
           <div class="detail-left">
             <MetadataEditor info={overview.prospect_info} onSave={handleMetadataSave} />
+            <ServerPanel prospectId={view.selectedProspectId || ""} />
           </div>
           <div class="detail-right">
             <div class="detail-tabs">
