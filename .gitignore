@@ -18,5 +18,8 @@ Thumbs.db
 # Tauri
 src-tauri/gen/
 
+# Worktrees
+.worktrees/
+
 # Test artifacts
 *.bak
