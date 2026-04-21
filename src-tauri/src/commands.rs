@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use tauri::State;
 
 use crate::prospect::backup;
+use crate::prospect::diff;
 use crate::prospect::domain;
 use crate::prospect::envelope;
 use crate::prospect::error::ProspectError;
@@ -497,6 +498,113 @@ pub fn search_components(
     }
 
     Ok(hits)
+}
+
+// ────────────────────────────────────────────────────────────
+// Diff
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn diff_prospects(
+    id_a: String,
+    id_b: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<diff::ProspectDiff, String> {
+    let mut state = state.lock().unwrap();
+
+    // Check both prospects are loaded
+    if !state.open_prospects.contains_key(&id_a) {
+        return Err(format!("Prospect '{}' not loaded", id_a));
+    }
+    if !state.open_prospects.contains_key(&id_b) {
+        return Err(format!("Prospect '{}' not loaded", id_b));
+    }
+
+    // Compare metadata (info fields as Debug string comparison)
+    let info_a = state.open_prospects[&id_a].info.clone();
+    let info_b = state.open_prospects[&id_b].info.clone();
+
+    let mut metadata_changes = Vec::new();
+
+    macro_rules! cmp_field {
+        ($field:ident) => {
+            let va = format!("{:?}", info_a.$field);
+            let vb = format!("{:?}", info_b.$field);
+            if va != vb {
+                metadata_changes.push(diff::FieldDiff {
+                    field: stringify!($field).to_string(),
+                    old_value: va,
+                    new_value: vb,
+                });
+            }
+        };
+    }
+    cmp_field!(prospect_state);
+    cmp_field!(lobby_name);
+    cmp_field!(elapsed_time);
+    cmp_field!(expire_time);
+    cmp_field!(difficulty);
+    cmp_field!(no_respawns);
+
+    // Compare components
+    let count_a = state.open_prospects[&id_a].blob.components.len();
+    let count_b = state.open_prospects[&id_b].blob.components.len();
+
+    let mut added_components = Vec::new();
+    let mut removed_components = Vec::new();
+    let mut modified_components = Vec::new();
+
+    let min_count = count_a.min(count_b);
+
+    // Compare matching by position index
+    for idx in 0..min_count {
+        let class_a = state.open_prospects[&id_a].blob.components[idx].class_name.clone();
+        let class_b = state.open_prospects[&id_b].blob.components[idx].class_name.clone();
+
+        // Only compare components with same class at same position
+        if class_a != class_b {
+            continue;
+        }
+
+        let props_a = match state.open_prospects.get_mut(&id_a).unwrap().blob.parse_component(idx) {
+            Ok(p) => p.clone(),
+            Err(_) => continue,
+        };
+        let props_b = match state.open_prospects.get_mut(&id_b).unwrap().blob.parse_component(idx) {
+            Ok(p) => p.clone(),
+            Err(_) => continue,
+        };
+
+        let mut property_changes = Vec::new();
+        diff::diff_properties(&props_a, &props_b, "", &mut property_changes);
+
+        if !property_changes.is_empty() {
+            let component_name = class_a.split('/').last().unwrap_or(&class_a)
+                .split('.').last().unwrap_or(&class_a).to_string();
+            modified_components.push(diff::ComponentDiff {
+                component_name,
+                component_class: class_a,
+                property_changes,
+            });
+        }
+    }
+
+    // Extra components in A (removed)
+    for idx in min_count..count_a {
+        removed_components.push(state.open_prospects[&id_a].blob.components[idx].class_name.clone());
+    }
+
+    // Extra components in B (added)
+    for idx in min_count..count_b {
+        added_components.push(state.open_prospects[&id_b].blob.components[idx].class_name.clone());
+    }
+
+    Ok(diff::ProspectDiff {
+        metadata_changes,
+        added_components,
+        removed_components,
+        modified_components,
+    })
 }
 
 fn search_properties(

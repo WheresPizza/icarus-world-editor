@@ -10,9 +10,11 @@
   import * as api from "./lib/api";
   import { formatElapsedTime, shortClassName } from "./lib/helpers";
   import ProspectCard from "./lib/components/ProspectCard.svelte";
+  import DiffView from "./lib/components/DiffView.svelte";
   import MetadataEditor from "./lib/components/MetadataEditor.svelte";
   import ComponentList from "./lib/components/ComponentList.svelte";
   import PropertyTree from "./lib/components/PropertyTree.svelte";
+  import type { ProspectDiff } from "./lib/types";
 
   // State
   let prospectsDir = $state<string | null>(null);
@@ -23,6 +25,12 @@
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
   let navTab = $state<"prospects" | "backups" | "settings">("prospects");
+
+  // Compare / diff state
+  let compareMode = $state(false);
+  let compareIdA = $state<string | null>(null);
+  let compareIdB = $state<string | null>(null);
+  let diffResult = $state<ProspectDiff | null>(null);
 
   let view = $state<AppViewState>({
     mode: "library",
@@ -171,6 +179,43 @@
       await loadProspects();
     }
   }
+
+  function selectForCompare(prospectId: string) {
+    if (!compareIdA) {
+      compareIdA = prospectId;
+    } else if (!compareIdB && prospectId !== compareIdA) {
+      compareIdB = prospectId;
+    }
+  }
+
+  async function runDiff() {
+    if (!compareIdA || !compareIdB) return;
+    loading = true;
+    errorMsg = null;
+    try {
+      diffResult = await api.diffProspects(compareIdA, compareIdB);
+      view = { ...view, mode: "diff" as any };
+    } catch (e: any) {
+      errorMsg = "Diff failed: " + e.toString();
+    } finally {
+      loading = false;
+    }
+  }
+
+  function cancelCompare() {
+    compareMode = false;
+    compareIdA = null;
+    compareIdB = null;
+    diffResult = null;
+    if ((view.mode as any) === "diff") {
+      view = {
+        mode: "library",
+        selectedProspectId: null,
+        selectedProspectPath: null,
+        selectedComponentIndex: null,
+      };
+    }
+  }
 </script>
 
 <main class="app">
@@ -263,6 +308,23 @@
             placeholder="Search by name, map, difficulty, player..."
             bind:value={searchQuery}
           />
+          <div class="compare-controls">
+            <button
+              class="btn"
+              class:active={compareMode}
+              onclick={() => { compareMode = !compareMode; if (!compareMode) cancelCompare(); }}
+            >
+              {compareMode ? "Cancel Compare" : "Compare"}
+            </button>
+            {#if compareMode}
+              <span class="compare-status">
+                {#if !compareIdA}Select prospect A{:else if !compareIdB}Select prospect B{:else}Ready to compare{/if}
+              </span>
+              {#if compareIdA && compareIdB}
+                <button class="btn btn-primary" onclick={runDiff}>Run Diff</button>
+              {/if}
+            {/if}
+          </div>
         </div>
 
         {#if filteredProspects.length === 0}
@@ -272,11 +334,35 @@
         {:else}
           <div class="prospect-grid">
             {#each filteredProspects as prospect}
-              <ProspectCard {prospect} onOpen={openProspect} />
+              <div class="card-wrapper">
+                <ProspectCard {prospect} onOpen={compareMode ? () => {} : openProspect} />
+                {#if compareMode}
+                  {@const pid = prospect.prospect_info.ProspectID}
+                  {@const isA = compareIdA === pid}
+                  {@const isB = compareIdB === pid}
+                  <button
+                    class="compare-overlay"
+                    class:selected-a={isA}
+                    class:selected-b={isB}
+                    onclick={() => selectForCompare(pid)}
+                  >
+                    {#if isA}A{:else if isB}B{:else}Select{/if}
+                  </button>
+                {/if}
+              </div>
             {/each}
           </div>
         {/if}
       </div>
+
+    {:else if (view.mode as any) === "diff" && diffResult}
+      <!-- Diff View -->
+      <DiffView
+        {diffResult}
+        nameA={compareIdA || "A"}
+        nameB={compareIdB || "B"}
+        onBack={cancelCompare}
+      />
 
     {:else if view.mode === "detail" && overview}
       <!-- Detail View -->
@@ -734,5 +820,60 @@
 
   .setting-row input {
     flex: 1;
+  }
+
+  /* Compare controls */
+  .compare-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .compare-status {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .btn.active {
+    background: var(--bg-active);
+    color: var(--accent-blue);
+  }
+
+  /* Card wrapper for compare overlay */
+  .card-wrapper {
+    position: relative;
+  }
+
+  .compare-overlay {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+    z-index: 10;
+  }
+
+  .compare-overlay:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .compare-overlay.selected-a {
+    background: rgba(231, 76, 60, 0.2);
+    color: var(--accent-red);
+    border-color: var(--accent-red);
+  }
+
+  .compare-overlay.selected-b {
+    background: rgba(46, 204, 113, 0.2);
+    color: var(--accent-green);
+    border-color: var(--accent-green);
   }
 </style>

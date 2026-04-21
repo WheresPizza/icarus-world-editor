@@ -84,6 +84,31 @@ export interface SearchHit {
   value_preview: string;
 }
 
+export interface FieldDiff {
+  field: string;
+  old_value: string;
+  new_value: string;
+}
+
+export interface PropertyDiff {
+  path: string;
+  old_value: string;
+  new_value: string;
+}
+
+export interface ComponentDiff {
+  component_name: string;
+  component_class: string;
+  property_changes: PropertyDiff[];
+}
+
+export interface ProspectDiff {
+  metadata_changes: FieldDiff[];
+  added_components: string[];
+  removed_components: string[];
+  modified_components: ComponentDiff[];
+}
+
 // View state
 export type ViewMode = "library" | "detail" | "component";
 

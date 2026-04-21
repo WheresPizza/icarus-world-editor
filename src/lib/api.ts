@@ -7,6 +7,7 @@ import type {
   AppConfig,
   ProspectInfo,
   SearchHit,
+  ProspectDiff,
 } from "./types";
 
 export async function listProspects(dir: string): Promise<ProspectSummary[]> {
@@ -93,4 +94,11 @@ export async function searchComponents(
   query: string
 ): Promise<SearchHit[]> {
   return invoke("search_components", { prospectId, query });
+}
+
+export async function diffProspects(
+  idA: string,
+  idB: string
+): Promise<ProspectDiff> {
+  return invoke("diff_prospects", { idA, idB });
 }
