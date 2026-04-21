@@ -737,10 +737,14 @@ fn read_map_type_value(
                 properties,
             })
         }
-        _ => Err(ProspectError::UnsupportedPropertyType(format!(
-            "Unsupported map type: {}",
-            type_name
-        ))),
+        _ => {
+            // Unknown map type — read remaining bytes for this entry as raw
+            // We can't know the size, so read 0 bytes and return a marker
+            Ok(PropertyValue::Raw {
+                prop_type: type_name.to_string(),
+                data: Vec::new(),
+            })
+        }
     }
 }
 

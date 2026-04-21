@@ -60,7 +60,7 @@
 
   function isEditable(): boolean {
     const t = propType;
-    return ["Int", "Int64", "Float", "Double", "Bool", "Str", "Name"].includes(t);
+    return ["Int", "Int64", "Float", "Double", "Bool", "Str", "Name", "Enum", "Byte"].includes(t);
   }
 
   function handleEdit(newValue: string) {
@@ -71,10 +71,50 @@
       parsed = parseInt(newValue, 10);
     } else if (["Float", "Double"].includes(propType)) {
       parsed = parseFloat(newValue);
+    } else if (propType === "Enum") {
+      parsed = newValue; // string enum value
+    } else if (propType === "Byte") {
+      // Check if it's a plain byte (has byte_value) or named enum
+      const byteVal = parseInt(newValue, 10);
+      parsed = isNaN(byteVal) ? newValue : byteVal;
     } else {
       parsed = newValue;
     }
     onPropertyChange?.(path, parsed);
+  }
+
+  function removeArrayItem(index: number) {
+    const items = getArrayItems();
+    if (!items) return;
+    const newItems = items.filter((_: any, i: number) => i !== index);
+    const newValue = rebuildArrayValue(newItems);
+    onPropertyChange?.(path, newValue);
+  }
+
+  function addArrayItem() {
+    const items = getArrayItems();
+    if (!items) return;
+    const lastItem = items[items.length - 1];
+    const newItem = lastItem !== undefined ? JSON.parse(JSON.stringify(lastItem)) : 0;
+    const newItems = [...items, newItem];
+    const newValue = rebuildArrayValue(newItems);
+    onPropertyChange?.(path, newValue);
+  }
+
+  function getArrayItems(): any[] | null {
+    const v = property.value;
+    if (!v?.items) return null;
+    if (Array.isArray(v.items)) return v.items;
+    if (v.items.items) return v.items.items;
+    return null;
+  }
+
+  function rebuildArrayValue(newItems: any[]): any {
+    const v = property.value;
+    if (Array.isArray(v.items)) {
+      return { ...v, items: newItems };
+    }
+    return { ...v, items: { ...v.items, items: newItems } };
   }
 
   const typeColors: Record<string, string> = {
@@ -120,6 +160,31 @@
         >
           {property.value ? "true" : "false"}
         </button>
+      {:else if propType === "Enum"}
+        <input
+          class="inline-edit"
+          type="text"
+          value={property.value?.enum_value ?? property.value ?? ""}
+          onchange={(e) => handleEdit((e.target as HTMLInputElement).value)}
+        />
+      {:else if propType === "Byte"}
+        {#if property.value?.byte_value !== undefined}
+          <input
+            class="inline-edit"
+            type="number"
+            min="0"
+            max="255"
+            value={property.value.byte_value}
+            onchange={(e) => handleEdit((e.target as HTMLInputElement).value)}
+          />
+        {:else}
+          <input
+            class="inline-edit"
+            type="text"
+            value={property.value?.enum_value ?? ""}
+            onchange={(e) => handleEdit((e.target as HTMLInputElement).value)}
+          />
+        {/if}
       {:else}
         <input
           class="inline-edit"
@@ -137,14 +202,29 @@
 
   {#if expanded && isExpandable}
     <div class="node-children">
-      {#each getChildren() as child}
-        <PropertyNode
-          property={child}
-          path="{path}.{child.name}"
-          depth={depth + 1}
-          {onPropertyChange}
-        />
-      {/each}
+      {#if propType === "Array"}
+        {#each getChildren() as child, i}
+          <div class="array-item-row">
+            <PropertyNode
+              property={child}
+              path="{path}[{i}]"
+              depth={depth + 1}
+              {onPropertyChange}
+            />
+            <button class="remove-btn" onclick={() => removeArrayItem(i)}>×</button>
+          </div>
+        {/each}
+        <button class="add-btn" onclick={addArrayItem}>+ Add Item</button>
+      {:else}
+        {#each getChildren() as child}
+          <PropertyNode
+            property={child}
+            path="{path}.{child.name}"
+            depth={depth + 1}
+            {onPropertyChange}
+          />
+        {/each}
+      {/if}
     </div>
   {/if}
 </div>
@@ -245,5 +325,41 @@
   .node-children {
     border-left: 1px solid var(--border-color);
     margin-left: 16px;
+  }
+
+  .array-item-row {
+    display: flex;
+    align-items: flex-start;
+  }
+
+  .array-item-row > :first-child {
+    flex: 1;
+  }
+
+  .remove-btn {
+    color: var(--accent-red);
+    font-size: 14px;
+    padding: 2px 6px;
+    opacity: 0.6;
+    flex-shrink: 0;
+  }
+
+  .remove-btn:hover {
+    opacity: 1;
+  }
+
+  .add-btn {
+    margin-left: 24px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--accent-green);
+    padding: 2px 8px;
+    border: 1px dashed currentColor;
+    border-radius: 3px;
+    opacity: 0.7;
+  }
+
+  .add-btn:hover {
+    opacity: 1;
   }
 </style>

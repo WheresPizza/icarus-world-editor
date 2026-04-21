@@ -303,11 +303,58 @@ fn update_property_value(
         PropertyValue::Enum { enum_value, .. } => {
             *enum_value = json_value.as_str().unwrap_or("").to_string();
         }
+        PropertyValue::Byte { enum_type, enum_value, byte_value } => {
+            if *enum_type == "None" {
+                // Plain byte
+                if let Some(n) = json_value.as_u64() {
+                    *byte_value = Some(n as u8);
+                } else if let Some(s) = json_value.as_str() {
+                    if let Ok(n) = s.parse::<u8>() {
+                        *byte_value = Some(n);
+                    }
+                }
+            } else {
+                // Named enum byte
+                *enum_value = Some(json_value.as_str().unwrap_or("").to_string());
+            }
+        }
+        PropertyValue::Array { .. } | PropertyValue::Map { .. } => {
+            let new_val: PropertyValue = serde_json::from_value(json_value.clone())
+                .map_err(|e| ProspectError::UnsupportedPropertyType(e.to_string()))?;
+            *prop_value = new_val;
+        }
         _ => {
             return Err(ProspectError::UnsupportedPropertyType(
                 "Cannot directly update this property type".to_string(),
             ));
         }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_array_property(
+    prospect_id: String,
+    component_index: usize,
+    property_path: String,
+    new_value: serde_json::Value,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    prospect
+        .blob
+        .parse_component(component_index)
+        .map_err(|e| e.to_string())?;
+
+    let component = &mut prospect.blob.components[component_index];
+    if let Some(props) = &mut component.parsed {
+        update_property_at_path(props, &property_path, &new_value).map_err(|e| e.to_string())?;
+        component.dirty = true;
     }
     Ok(())
 }

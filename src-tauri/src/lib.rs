@@ -77,6 +77,7 @@ pub fn run() {
             commands::get_domain_view,
             commands::update_metadata,
             commands::update_component_property,
+            commands::update_array_property,
             commands::save_prospect,
             commands::backup_prospect_cmd,
             commands::restore_prospect_cmd,
