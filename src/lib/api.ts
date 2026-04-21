@@ -8,6 +8,7 @@ import type {
   ProspectInfo,
   SearchHit,
   ProspectDiff,
+  InventoryView,
 } from "./types";
 
 export async function listProspects(dir: string): Promise<ProspectSummary[]> {
@@ -101,4 +102,41 @@ export async function diffProspects(
   idB: string
 ): Promise<ProspectDiff> {
   return invoke("diff_prospects", { idA, idB });
+}
+
+export async function getInventoryView(prospectId: string): Promise<InventoryView> {
+  return invoke("get_inventory_view", { prospectId });
+}
+
+export async function updateInventorySlot(
+  prospectId: string,
+  componentIdx: number,
+  slotIndex: number,
+  itemKey: string,
+  quantity: number
+): Promise<void> {
+  return invoke("update_inventory_slot", {
+    prospectId,
+    componentIdx,
+    slotIndex,
+    itemKey,
+    quantity,
+  });
+}
+
+export async function deleteInventorySlot(
+  prospectId: string,
+  componentIdx: number,
+  slotIndex: number
+): Promise<void> {
+  return invoke("delete_inventory_slot", { prospectId, componentIdx, slotIndex });
+}
+
+export async function addInventoryItem(
+  prospectId: string,
+  componentIdx: number,
+  itemKey: string,
+  quantity: number
+): Promise<void> {
+  return invoke("add_inventory_item", { prospectId, componentIdx, itemKey, quantity });
 }

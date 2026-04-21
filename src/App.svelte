@@ -14,6 +14,7 @@
   import MetadataEditor from "./lib/components/MetadataEditor.svelte";
   import ComponentList from "./lib/components/ComponentList.svelte";
   import PropertyTree from "./lib/components/PropertyTree.svelte";
+  import InventoryEditor from "./lib/components/InventoryEditor.svelte";
   import type { ProspectDiff } from "./lib/types";
 
   // State
@@ -25,6 +26,7 @@
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
   let navTab = $state<"prospects" | "backups" | "settings">("prospects");
+  let detailTab = $state<"components" | "inventory">("components");
 
   // Compare / diff state
   let compareMode = $state(false);
@@ -394,12 +396,30 @@
             <MetadataEditor info={overview.prospect_info} onSave={handleMetadataSave} />
           </div>
           <div class="detail-right">
-            <ComponentList
-              components={overview.components}
-              onSelect={openComponent}
-              prospectId={view.selectedProspectId || ""}
-              onSearchHitSelect={openComponent}
-            />
+            <div class="detail-tabs">
+              <button
+                class="tab-btn"
+                class:active={detailTab === "components"}
+                onclick={() => detailTab = "components"}
+              >Components</button>
+              <button
+                class="tab-btn"
+                class:active={detailTab === "inventory"}
+                onclick={() => detailTab = "inventory"}
+              >Inventory</button>
+            </div>
+            {#if detailTab === "components"}
+              <ComponentList
+                components={overview.components}
+                onSelect={openComponent}
+                prospectId={view.selectedProspectId || ""}
+                onSearchHitSelect={openComponent}
+              />
+            {:else}
+              <InventoryEditor
+                prospectId={view.selectedProspectId || ""}
+              />
+            {/if}
           </div>
         </div>
       </div>
@@ -753,6 +773,27 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+  }
+
+  .detail-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+
+  .tab-btn {
+    flex: 1;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    border-bottom: 2px solid transparent;
+  }
+
+  .tab-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+  .tab-btn.active {
+    color: var(--accent-blue);
+    border-bottom-color: var(--accent-blue);
   }
 
   /* Component View */

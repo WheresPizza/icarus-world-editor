@@ -85,6 +85,10 @@ pub fn run() {
             commands::set_config,
             commands::search_components,
             commands::diff_prospects,
+            commands::get_inventory_view,
+            commands::update_inventory_slot,
+            commands::delete_inventory_slot,
+            commands::add_inventory_item,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

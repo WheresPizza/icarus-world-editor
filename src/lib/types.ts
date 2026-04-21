@@ -109,6 +109,24 @@ export interface ProspectDiff {
   modified_components: ComponentDiff[];
 }
 
+export interface ItemSlot {
+  slot_index: number;
+  item_key: string;
+  quantity: number;
+  durability: number | null;
+}
+
+export interface InventoryComponent {
+  component_idx: number;
+  component_name: string;
+  component_class: string;
+  slots: ItemSlot[];
+}
+
+export interface InventoryView {
+  components: InventoryComponent[];
+}
+
 // View state
 export type ViewMode = "library" | "detail" | "component";
 

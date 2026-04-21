@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::prospect::backup;
 use crate::prospect::diff;
-use crate::prospect::domain;
+use crate::prospect::domain::{self, InventoryView};
 use crate::prospect::envelope;
 use crate::prospect::error::ProspectError;
 use serde::{Deserialize, Serialize};
@@ -605,6 +605,256 @@ pub fn diff_prospects(
         removed_components,
         modified_components,
     })
+}
+
+// ────────────────────────────────────────────────────────────
+// Inventory editor commands
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_inventory_view(
+    prospect_id: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<InventoryView, String> {
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    let total = prospect.blob.components.len();
+    let mut component_data: Vec<(usize, String, Vec<Property>)> = Vec::new();
+
+    for idx in 0..total {
+        let class_name = prospect.blob.components[idx].class_name.clone();
+        let props = match prospect.blob.parse_component(idx) {
+            Ok(p) => p.clone(),
+            Err(_) => continue,
+        };
+        component_data.push((idx, class_name, props));
+    }
+
+    Ok(domain::build_inventory_view(component_data))
+}
+
+#[tauri::command]
+pub fn update_inventory_slot(
+    prospect_id: String,
+    component_idx: usize,
+    slot_index: u32,
+    item_key: String,
+    quantity: u32,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    prospect
+        .blob
+        .parse_component(component_idx)
+        .map_err(|e| e.to_string())?;
+
+    let component = &mut prospect.blob.components[component_idx];
+    if let Some(props) = &mut component.parsed {
+        update_inventory_slot_in_props(props, slot_index, &item_key, quantity)?;
+        component.dirty = true;
+    }
+    Ok(())
+}
+
+fn update_inventory_slot_in_props(
+    properties: &mut Vec<Property>,
+    slot_index: u32,
+    item_key: &str,
+    quantity: u32,
+) -> Result<(), String> {
+    for prop in properties.iter_mut() {
+        if prop.name == "SavedInventories" || prop.name == "Items" {
+            if let PropertyValue::Array {
+                items: ArrayItems::Structs { items: struct_items, .. },
+                ..
+            } = &mut prop.value
+            {
+                for item_props in struct_items.iter_mut() {
+                    let current_slot: i32 = item_props
+                        .iter()
+                        .find(|p| p.name == "SlotIndex")
+                        .and_then(|p| if let PropertyValue::Int(v) = &p.value { Some(*v) } else { None })
+                        .unwrap_or(-1);
+
+                    if current_slot == slot_index as i32 {
+                        for p in item_props.iter_mut() {
+                            match p.name.as_str() {
+                                "StaticItemDataRowName" | "ItemRowName" => {
+                                    p.value = PropertyValue::Name(item_key.to_string());
+                                }
+                                "StackCount" | "ItemCount" => {
+                                    p.value = PropertyValue::Int(quantity as i32);
+                                }
+                                _ => {}
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+                // Slot not found — append a new slot
+                let new_slot = vec![
+                    Property {
+                        name: "SlotIndex".to_string(),
+                        value: PropertyValue::Int(slot_index as i32),
+                    },
+                    Property {
+                        name: "StaticItemDataRowName".to_string(),
+                        value: PropertyValue::Name(item_key.to_string()),
+                    },
+                    Property {
+                        name: "StackCount".to_string(),
+                        value: PropertyValue::Int(quantity as i32),
+                    },
+                ];
+                struct_items.push(new_slot);
+                return Ok(());
+            }
+        }
+        if let PropertyValue::Struct { properties: inner, .. } = &mut prop.value {
+            if update_inventory_slot_in_props(inner, slot_index, item_key, quantity).is_ok() {
+                return Ok(());
+            }
+        }
+    }
+    Err(format!("Inventory array not found in component {}", slot_index))
+}
+
+#[tauri::command]
+pub fn delete_inventory_slot(
+    prospect_id: String,
+    component_idx: usize,
+    slot_index: u32,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    prospect
+        .blob
+        .parse_component(component_idx)
+        .map_err(|e| e.to_string())?;
+
+    let component = &mut prospect.blob.components[component_idx];
+    if let Some(props) = &mut component.parsed {
+        delete_inventory_slot_in_props(props, slot_index);
+        component.dirty = true;
+    }
+    Ok(())
+}
+
+fn delete_inventory_slot_in_props(properties: &mut Vec<Property>, slot_index: u32) {
+    for prop in properties.iter_mut() {
+        if prop.name == "SavedInventories" || prop.name == "Items" {
+            if let PropertyValue::Array {
+                items: ArrayItems::Structs { items: struct_items, .. },
+                ..
+            } = &mut prop.value
+            {
+                struct_items.retain(|item_props| {
+                    let current_slot: i32 = item_props
+                        .iter()
+                        .find(|p| p.name == "SlotIndex")
+                        .and_then(|p| if let PropertyValue::Int(v) = &p.value { Some(*v) } else { None })
+                        .unwrap_or(-1);
+                    current_slot != slot_index as i32
+                });
+                return;
+            }
+        }
+        if let PropertyValue::Struct { properties: inner, .. } = &mut prop.value {
+            delete_inventory_slot_in_props(inner, slot_index);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn add_inventory_item(
+    prospect_id: String,
+    component_idx: usize,
+    item_key: String,
+    quantity: u32,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    prospect
+        .blob
+        .parse_component(component_idx)
+        .map_err(|e| e.to_string())?;
+
+    let component = &mut prospect.blob.components[component_idx];
+    if let Some(props) = &mut component.parsed {
+        add_item_to_props(props, &item_key, quantity)?;
+        component.dirty = true;
+    }
+    Ok(())
+}
+
+fn add_item_to_props(
+    properties: &mut Vec<Property>,
+    item_key: &str,
+    quantity: u32,
+) -> Result<(), String> {
+    for prop in properties.iter_mut() {
+        if prop.name == "SavedInventories" || prop.name == "Items" {
+            if let PropertyValue::Array {
+                items: ArrayItems::Structs { items: struct_items, .. },
+                ..
+            } = &mut prop.value
+            {
+                let max_slot = struct_items
+                    .iter()
+                    .filter_map(|item_props| {
+                        item_props
+                            .iter()
+                            .find(|p| p.name == "SlotIndex")
+                            .and_then(|p| if let PropertyValue::Int(v) = &p.value { Some(*v) } else { None })
+                    })
+                    .max()
+                    .unwrap_or(-1);
+
+                let new_slot_idx = max_slot + 1;
+                let new_slot = vec![
+                    Property {
+                        name: "SlotIndex".to_string(),
+                        value: PropertyValue::Int(new_slot_idx),
+                    },
+                    Property {
+                        name: "StaticItemDataRowName".to_string(),
+                        value: PropertyValue::Name(item_key.to_string()),
+                    },
+                    Property {
+                        name: "StackCount".to_string(),
+                        value: PropertyValue::Int(quantity as i32),
+                    },
+                ];
+                struct_items.push(new_slot);
+                return Ok(());
+            }
+        }
+        if let PropertyValue::Struct { properties: inner, .. } = &mut prop.value {
+            if add_item_to_props(inner, item_key, quantity).is_ok() {
+                return Ok(());
+            }
+        }
+    }
+    Err("Inventory array not found in component".to_string())
 }
 
 fn search_properties(

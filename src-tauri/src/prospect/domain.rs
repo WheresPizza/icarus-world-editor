@@ -129,6 +129,84 @@ pub fn extract_deployable(properties: &[Property]) -> Option<DeployableRecord> {
     })
 }
 
+/// A view of all inventory-bearing components in a prospect
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InventoryView {
+    pub components: Vec<InventoryComponent>,
+}
+
+/// Inventory data for a single component
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InventoryComponent {
+    pub component_idx: usize,
+    pub component_name: String,
+    pub component_class: String,
+    pub slots: Vec<ItemSlot>,
+}
+
+/// A single inventory slot
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemSlot {
+    pub slot_index: u32,
+    pub item_key: String,
+    pub quantity: u32,
+    pub durability: Option<f32>,
+}
+
+/// Build an InventoryView from all components in the prospect
+pub fn build_inventory_view(
+    components: Vec<(usize, String, Vec<Property>)>,
+) -> InventoryView {
+    let mut inv_components = Vec::new();
+
+    for (idx, class_name, props) in &components {
+        // Only include components that look like inventory containers
+        if !class_name.contains("PlayerState")
+            && !class_name.contains("Container")
+            && !class_name.contains("Inventory")
+            && !class_name.contains("Storage")
+            && !class_name.contains("Crafting")
+        {
+            continue;
+        }
+
+        let items = extract_inventory_items(props);
+        if items.is_empty() {
+            continue;
+        }
+
+        let component_name = class_name
+            .split('/')
+            .last()
+            .unwrap_or(class_name)
+            .split('.')
+            .last()
+            .unwrap_or(class_name)
+            .to_string();
+
+        let slots: Vec<ItemSlot> = items
+            .iter()
+            .map(|item| ItemSlot {
+                slot_index: item.slot_index as u32,
+                item_key: item.item_name.clone(),
+                quantity: item.stack_count as u32,
+                durability: item.durability,
+            })
+            .collect();
+
+        inv_components.push(InventoryComponent {
+            component_idx: *idx,
+            component_name,
+            component_class: class_name.clone(),
+            slots,
+        });
+    }
+
+    InventoryView {
+        components: inv_components,
+    }
+}
+
 fn extract_vector(properties: &[Property], out: &mut [f64; 3]) {
     for prop in properties {
         match (prop.name.as_str(), &prop.value) {
