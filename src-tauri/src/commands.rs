@@ -8,8 +8,19 @@ use crate::prospect::backup;
 use crate::prospect::domain;
 use crate::prospect::envelope;
 use crate::prospect::error::ProspectError;
+use serde::{Deserialize, Serialize};
+
 use crate::prospect::property_engine::{ArrayItems, Property, PropertyValue, ProspectBlob};
 use crate::prospect::types::*;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub component_idx: usize,
+    pub component_name: String,
+    pub component_class: String,
+    pub property_path: String,
+    pub value_preview: String,
+}
 
 pub struct AppState {
     pub config: AppConfig,
@@ -439,4 +450,169 @@ pub fn set_config(
     let mut state = state.lock().unwrap();
     state.config = config;
     Ok(())
+}
+
+// ────────────────────────────────────────────────────────────
+// Global component search
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn search_components(
+    prospect_id: String,
+    query: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Vec<SearchHit>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let q = query.to_lowercase();
+    let mut hits = Vec::new();
+
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    let total = prospect.blob.components.len();
+    for idx in 0..total {
+        let class_name = prospect.blob.components[idx].class_name.clone();
+        let component_name = {
+            // Use last segment of class name as display name
+            class_name.split('/').last().unwrap_or(&class_name).split('.').last().unwrap_or(&class_name).to_string()
+        };
+
+        // Parse component if not already parsed
+        let props = match prospect.blob.parse_component(idx) {
+            Ok(p) => p.clone(),
+            Err(_) => continue, // skip unparseable components
+        };
+
+        // Walk properties recursively
+        search_properties(&props, &q, &component_name, &class_name, idx, String::new(), &mut hits);
+
+        if hits.len() >= 200 {
+            break;
+        }
+    }
+
+    Ok(hits)
+}
+
+fn search_properties(
+    properties: &[Property],
+    query: &str,
+    component_name: &str,
+    component_class: &str,
+    component_idx: usize,
+    prefix: String,
+    hits: &mut Vec<SearchHit>,
+) {
+    for prop in properties {
+        if hits.len() >= 200 {
+            return;
+        }
+        let path = if prefix.is_empty() {
+            prop.name.clone()
+        } else {
+            format!("{}.{}", prefix, prop.name)
+        };
+
+        let value_str = property_value_to_string(&prop.value);
+
+        let name_matches = prop.name.to_lowercase().contains(query);
+        let value_matches = value_str.to_lowercase().contains(query);
+
+        if name_matches || value_matches {
+            hits.push(SearchHit {
+                component_idx,
+                component_name: component_name.to_string(),
+                component_class: component_class.to_string(),
+                property_path: path.clone(),
+                value_preview: value_str.chars().take(80).collect(),
+            });
+        }
+
+        // Recurse into nested structures
+        match &prop.value {
+            PropertyValue::Struct { properties: inner, .. } => {
+                search_properties(inner, query, component_name, component_class, component_idx, path, hits);
+            }
+            PropertyValue::Array { items, .. } => {
+                match items {
+                    ArrayItems::Structs { items: struct_items, .. } => {
+                        for (i, item_props) in struct_items.iter().enumerate() {
+                            let item_path = format!("{}[{}]", path, i);
+                            search_properties(item_props, query, component_name, component_class, component_idx, item_path, hits);
+                        }
+                    }
+                    ArrayItems::Names(names) => {
+                        for (i, name) in names.iter().enumerate() {
+                            if name.to_lowercase().contains(query) {
+                                hits.push(SearchHit {
+                                    component_idx,
+                                    component_name: component_name.to_string(),
+                                    component_class: component_class.to_string(),
+                                    property_path: format!("{}[{}]", path, i),
+                                    value_preview: name.chars().take(80).collect(),
+                                });
+                            }
+                        }
+                    }
+                    ArrayItems::Strs(strs) => {
+                        for (i, s) in strs.iter().enumerate() {
+                            if s.to_lowercase().contains(query) {
+                                hits.push(SearchHit {
+                                    component_idx,
+                                    component_name: component_name.to_string(),
+                                    component_class: component_class.to_string(),
+                                    property_path: format!("{}[{}]", path, i),
+                                    value_preview: s.chars().take(80).collect(),
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            PropertyValue::Map { entries, .. } => {
+                for (i, entry) in entries.iter().enumerate() {
+                    let entry_path = format!("{}.entry[{}]", path, i);
+                    let key_str = property_value_to_string(&entry.key);
+                    let val_str = property_value_to_string(&entry.value);
+                    if key_str.to_lowercase().contains(query) || val_str.to_lowercase().contains(query) {
+                        hits.push(SearchHit {
+                            component_idx,
+                            component_name: component_name.to_string(),
+                            component_class: component_class.to_string(),
+                            property_path: entry_path,
+                            value_preview: format!("{} = {}", key_str, val_str).chars().take(80).collect(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn property_value_to_string(value: &PropertyValue) -> String {
+    match value {
+        PropertyValue::Int(v) => v.to_string(),
+        PropertyValue::Int64(v) => v.to_string(),
+        PropertyValue::UInt32(v) => v.to_string(),
+        PropertyValue::UInt64(v) => v.to_string(),
+        PropertyValue::Float(v) => format!("{:.4}", v),
+        PropertyValue::Double(v) => format!("{:.4}", v),
+        PropertyValue::Bool(v) => v.to_string(),
+        PropertyValue::Str(v) | PropertyValue::Name(v) => v.clone(),
+        PropertyValue::Enum { enum_value, .. } => enum_value.clone(),
+        PropertyValue::Byte { byte_value: Some(b), .. } => b.to_string(),
+        PropertyValue::Byte { enum_value: Some(e), .. } => e.clone(),
+        PropertyValue::Byte { .. } => String::new(),
+        PropertyValue::Struct { struct_type, .. } => format!("{{Struct:{}}}", struct_type),
+        PropertyValue::Array { inner_type, .. } => format!("[Array:{}]", inner_type),
+        PropertyValue::Map { key_type, value_type, .. } => format!("{{Map:{}->{}}}", key_type, value_type),
+        PropertyValue::Raw { prop_type, .. } => format!("[Raw:{}]", prop_type),
+    }
 }

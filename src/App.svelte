@@ -308,7 +308,12 @@
             <MetadataEditor info={overview.prospect_info} onSave={handleMetadataSave} />
           </div>
           <div class="detail-right">
-            <ComponentList components={overview.components} onSelect={openComponent} />
+            <ComponentList
+              components={overview.components}
+              onSelect={openComponent}
+              prospectId={view.selectedProspectId || ""}
+              onSearchHitSelect={openComponent}
+            />
           </div>
         </div>
       </div>

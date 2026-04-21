@@ -76,6 +76,14 @@ export interface AppConfig {
   auto_backup_on_save: boolean;
 }
 
+export interface SearchHit {
+  component_idx: number;
+  component_name: string;
+  component_class: string;
+  property_path: string;
+  value_preview: string;
+}
+
 // View state
 export type ViewMode = "library" | "detail" | "component";
 

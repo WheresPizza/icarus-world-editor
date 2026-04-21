@@ -6,6 +6,7 @@ import type {
   BackupEntry,
   AppConfig,
   ProspectInfo,
+  SearchHit,
 } from "./types";
 
 export async function listProspects(dir: string): Promise<ProspectSummary[]> {
@@ -85,4 +86,11 @@ export async function getConfig(): Promise<AppConfig> {
 
 export async function setConfig(config: AppConfig): Promise<void> {
   return invoke("set_config", { config });
+}
+
+export async function searchComponents(
+  prospectId: string,
+  query: string
+): Promise<SearchHit[]> {
+  return invoke("search_components", { prospectId, query });
 }
