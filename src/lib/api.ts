@@ -57,20 +57,6 @@ export async function updateComponentProperty(
   });
 }
 
-export async function updateArrayProperty(
-  prospectId: string,
-  componentIndex: number,
-  propertyPath: string,
-  newValue: unknown
-): Promise<void> {
-  return invoke("update_array_property", {
-    prospectId,
-    componentIndex,
-    propertyPath,
-    newValue,
-  });
-}
-
 export async function saveProspect(prospectId: string): Promise<string> {
   return invoke("save_prospect", { prospectId });
 }

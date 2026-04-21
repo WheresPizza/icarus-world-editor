@@ -697,8 +697,28 @@ fn read_map_property(
     let mut entries = Vec::with_capacity(count);
 
     for _ in 0..count {
-        let key = read_map_type_value(cursor, &key_type)?;
-        let value = read_map_type_value(cursor, &value_type)?;
+        let key = match read_map_type_value(cursor, &key_type) {
+            Ok(k) => k,
+            Err(_) => {
+                log::warn!(
+                    "Map with key type '{}' or value type '{}' not fully supported, truncating entries",
+                    key_type,
+                    value_type
+                );
+                break;
+            }
+        };
+        let value = match read_map_type_value(cursor, &value_type) {
+            Ok(v) => v,
+            Err(_) => {
+                log::warn!(
+                    "Map with key type '{}' or value type '{}' not fully supported, truncating entries",
+                    key_type,
+                    value_type
+                );
+                break;
+            }
+        };
         entries.push(MapEntry { key, value });
     }
 
@@ -737,14 +757,10 @@ fn read_map_type_value(
                 properties,
             })
         }
-        _ => {
-            // Unknown map type — read remaining bytes for this entry as raw
-            // We can't know the size, so read 0 bytes and return a marker
-            Ok(PropertyValue::Raw {
-                prop_type: type_name.to_string(),
-                data: Vec::new(),
-            })
-        }
+        _ => Err(ProspectError::UnsupportedPropertyType(format!(
+            "Unsupported map type: {}",
+            type_name
+        ))),
     }
 }
 
