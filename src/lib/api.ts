@@ -6,6 +6,11 @@ import type {
   BackupEntry,
   AppConfig,
   ProspectInfo,
+  SearchHit,
+  ProspectDiff,
+  InventoryView,
+  ServerConfig,
+  ServerStatusResponse,
 } from "./types";
 
 export async function listProspects(dir: string): Promise<ProspectSummary[]> {
@@ -85,4 +90,79 @@ export async function getConfig(): Promise<AppConfig> {
 
 export async function setConfig(config: AppConfig): Promise<void> {
   return invoke("set_config", { config });
+}
+
+export async function searchComponents(
+  prospectId: string,
+  query: string
+): Promise<SearchHit[]> {
+  return invoke("search_components", { prospectId, query });
+}
+
+export async function diffProspects(
+  idA: string,
+  idB: string
+): Promise<ProspectDiff> {
+  return invoke("diff_prospects", { idA, idB });
+}
+
+export async function getInventoryView(prospectId: string): Promise<InventoryView> {
+  return invoke("get_inventory_view", { prospectId });
+}
+
+export async function updateInventorySlot(
+  prospectId: string,
+  componentIdx: number,
+  slotIndex: number,
+  itemKey: string,
+  quantity: number
+): Promise<void> {
+  return invoke("update_inventory_slot", {
+    prospectId,
+    componentIdx,
+    slotIndex,
+    itemKey,
+    quantity,
+  });
+}
+
+export async function deleteInventorySlot(
+  prospectId: string,
+  componentIdx: number,
+  slotIndex: number
+): Promise<void> {
+  return invoke("delete_inventory_slot", { prospectId, componentIdx, slotIndex });
+}
+
+export async function addInventoryItem(
+  prospectId: string,
+  componentIdx: number,
+  itemKey: string,
+  quantity: number
+): Promise<void> {
+  return invoke("add_inventory_item", { prospectId, componentIdx, itemKey, quantity });
+}
+
+export async function detectServer(): Promise<string | null> {
+  return invoke("detect_server");
+}
+
+export async function getServerConfig(): Promise<ServerConfig> {
+  return invoke("get_server_config");
+}
+
+export async function setServerConfig(config: ServerConfig): Promise<void> {
+  return invoke("set_server_config", { config });
+}
+
+export async function startServer(prospectId: string): Promise<void> {
+  return invoke("start_server", { prospectId });
+}
+
+export async function stopServer(): Promise<void> {
+  return invoke("stop_server");
+}
+
+export async function getServerStatus(): Promise<ServerStatusResponse> {
+  return invoke("get_server_status");
 }

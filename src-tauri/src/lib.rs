@@ -1,8 +1,9 @@
 mod commands;
 mod prospect;
+mod server;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use commands::AppState;
 use prospect::types::AppConfig;
@@ -67,8 +68,10 @@ pub fn run() {
         )
         .manage(Mutex::new(AppState {
             config: AppConfig::default(),
+            server_config: crate::server::ServerConfig::default(),
             open_prospects: HashMap::new(),
         }))
+        .manage(Arc::new(Mutex::new(crate::server::ServerState::default())))
         .invoke_handler(tauri::generate_handler![
             commands::list_prospects,
             commands::auto_detect_prospects_dir,
@@ -83,6 +86,18 @@ pub fn run() {
             commands::list_backups_cmd,
             commands::get_config,
             commands::set_config,
+            commands::search_components,
+            commands::diff_prospects,
+            commands::get_inventory_view,
+            commands::update_inventory_slot,
+            commands::delete_inventory_slot,
+            commands::add_inventory_item,
+            commands::detect_server,
+            commands::get_server_config,
+            commands::set_server_config,
+            commands::start_server,
+            commands::stop_server,
+            commands::get_server_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

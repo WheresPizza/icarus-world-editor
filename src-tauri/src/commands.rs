@@ -1,18 +1,33 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::State;
 
+use crate::server;
+
 use crate::prospect::backup;
-use crate::prospect::domain;
+use crate::prospect::diff;
+use crate::prospect::domain::{self, InventoryView};
 use crate::prospect::envelope;
 use crate::prospect::error::ProspectError;
+use serde::{Deserialize, Serialize};
+
 use crate::prospect::property_engine::{ArrayItems, Property, PropertyValue, ProspectBlob};
 use crate::prospect::types::*;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub component_idx: usize,
+    pub component_name: String,
+    pub component_class: String,
+    pub property_path: String,
+    pub value_preview: String,
+}
+
 pub struct AppState {
     pub config: AppConfig,
+    pub server_config: server::ServerConfig,
     pub open_prospects: HashMap<String, OpenProspect>,
 }
 
@@ -303,6 +318,26 @@ fn update_property_value(
         PropertyValue::Enum { enum_value, .. } => {
             *enum_value = json_value.as_str().unwrap_or("").to_string();
         }
+        PropertyValue::Byte { enum_type, enum_value, byte_value } => {
+            if *enum_type == "None" {
+                // Plain byte
+                if let Some(n) = json_value.as_u64() {
+                    *byte_value = Some(n as u8);
+                } else if let Some(s) = json_value.as_str() {
+                    if let Ok(n) = s.parse::<u8>() {
+                        *byte_value = Some(n);
+                    }
+                }
+            } else {
+                // Named enum byte
+                *enum_value = Some(json_value.as_str().unwrap_or("").to_string());
+            }
+        }
+        PropertyValue::Array { .. } | PropertyValue::Map { .. } => {
+            let new_val: PropertyValue = serde_json::from_value(json_value.clone())
+                .map_err(|e| ProspectError::UnsupportedPropertyType(e.to_string()))?;
+            *prop_value = new_val;
+        }
         _ => {
             return Err(ProspectError::UnsupportedPropertyType(
                 "Cannot directly update this property type".to_string(),
@@ -419,4 +454,601 @@ pub fn set_config(
     let mut state = state.lock().unwrap();
     state.config = config;
     Ok(())
+}
+
+// ────────────────────────────────────────────────────────────
+// Global component search
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn search_components(
+    prospect_id: String,
+    query: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Vec<SearchHit>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let q = query.to_lowercase();
+    let mut hits = Vec::new();
+
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    let total = prospect.blob.components.len();
+    for idx in 0..total {
+        let class_name = prospect.blob.components[idx].class_name.clone();
+        let component_name = {
+            // Use last segment of class name as display name
+            class_name.split('/').last().unwrap_or(&class_name).split('.').last().unwrap_or(&class_name).to_string()
+        };
+
+        // Parse component if not already parsed
+        let props = match prospect.blob.parse_component(idx) {
+            Ok(p) => p.clone(),
+            Err(_) => continue, // skip unparseable components
+        };
+
+        // Walk properties recursively
+        search_properties(&props, &q, &component_name, &class_name, idx, String::new(), &mut hits);
+
+        if hits.len() >= 200 {
+            break;
+        }
+    }
+
+    Ok(hits)
+}
+
+// ────────────────────────────────────────────────────────────
+// Diff
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn diff_prospects(
+    id_a: String,
+    id_b: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<diff::ProspectDiff, String> {
+    let mut state = state.lock().unwrap();
+
+    // Check both prospects are loaded
+    if !state.open_prospects.contains_key(&id_a) {
+        return Err(format!("Prospect '{}' not loaded", id_a));
+    }
+    if !state.open_prospects.contains_key(&id_b) {
+        return Err(format!("Prospect '{}' not loaded", id_b));
+    }
+
+    // Compare metadata (info fields as Debug string comparison)
+    let info_a = state.open_prospects[&id_a].info.clone();
+    let info_b = state.open_prospects[&id_b].info.clone();
+
+    let mut metadata_changes = Vec::new();
+
+    macro_rules! cmp_field {
+        ($field:ident) => {
+            let va = format!("{:?}", info_a.$field);
+            let vb = format!("{:?}", info_b.$field);
+            if va != vb {
+                metadata_changes.push(diff::FieldDiff {
+                    field: stringify!($field).to_string(),
+                    old_value: va,
+                    new_value: vb,
+                });
+            }
+        };
+    }
+    cmp_field!(prospect_state);
+    cmp_field!(lobby_name);
+    cmp_field!(elapsed_time);
+    cmp_field!(expire_time);
+    cmp_field!(difficulty);
+    cmp_field!(no_respawns);
+
+    // Compare components
+    let count_a = state.open_prospects[&id_a].blob.components.len();
+    let count_b = state.open_prospects[&id_b].blob.components.len();
+
+    let mut added_components = Vec::new();
+    let mut removed_components = Vec::new();
+    let mut modified_components = Vec::new();
+
+    let min_count = count_a.min(count_b);
+
+    // Compare matching by position index
+    for idx in 0..min_count {
+        let class_a = state.open_prospects[&id_a].blob.components[idx].class_name.clone();
+        let class_b = state.open_prospects[&id_b].blob.components[idx].class_name.clone();
+
+        // Only compare components with same class at same position
+        if class_a != class_b {
+            continue;
+        }
+
+        let props_a = match state.open_prospects.get_mut(&id_a).unwrap().blob.parse_component(idx) {
+            Ok(p) => p.clone(),
+            Err(_) => continue,
+        };
+        let props_b = match state.open_prospects.get_mut(&id_b).unwrap().blob.parse_component(idx) {
+            Ok(p) => p.clone(),
+            Err(_) => continue,
+        };
+
+        let mut property_changes = Vec::new();
+        diff::diff_properties(&props_a, &props_b, "", &mut property_changes);
+
+        if !property_changes.is_empty() {
+            let component_name = class_a.split('/').last().unwrap_or(&class_a)
+                .split('.').last().unwrap_or(&class_a).to_string();
+            modified_components.push(diff::ComponentDiff {
+                component_name,
+                component_class: class_a,
+                property_changes,
+            });
+        }
+    }
+
+    // Extra components in A (removed)
+    for idx in min_count..count_a {
+        removed_components.push(state.open_prospects[&id_a].blob.components[idx].class_name.clone());
+    }
+
+    // Extra components in B (added)
+    for idx in min_count..count_b {
+        added_components.push(state.open_prospects[&id_b].blob.components[idx].class_name.clone());
+    }
+
+    Ok(diff::ProspectDiff {
+        metadata_changes,
+        added_components,
+        removed_components,
+        modified_components,
+    })
+}
+
+// ────────────────────────────────────────────────────────────
+// Inventory editor commands
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_inventory_view(
+    prospect_id: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<InventoryView, String> {
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    let total = prospect.blob.components.len();
+    let mut component_data: Vec<(usize, String, Vec<Property>)> = Vec::new();
+
+    for idx in 0..total {
+        let class_name = prospect.blob.components[idx].class_name.clone();
+        let props = match prospect.blob.parse_component(idx) {
+            Ok(p) => p.clone(),
+            Err(_) => continue,
+        };
+        component_data.push((idx, class_name, props));
+    }
+
+    Ok(domain::build_inventory_view(component_data))
+}
+
+#[tauri::command]
+pub fn update_inventory_slot(
+    prospect_id: String,
+    component_idx: usize,
+    slot_index: u32,
+    item_key: String,
+    quantity: u32,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    prospect
+        .blob
+        .parse_component(component_idx)
+        .map_err(|e| e.to_string())?;
+
+    let component = &mut prospect.blob.components[component_idx];
+    if let Some(props) = &mut component.parsed {
+        update_inventory_slot_in_props(props, slot_index, &item_key, quantity)?;
+        component.dirty = true;
+    }
+    Ok(())
+}
+
+fn update_inventory_slot_in_props(
+    properties: &mut Vec<Property>,
+    slot_index: u32,
+    item_key: &str,
+    quantity: u32,
+) -> Result<(), String> {
+    for prop in properties.iter_mut() {
+        if prop.name == "SavedInventories" || prop.name == "Items" {
+            if let PropertyValue::Array {
+                items: ArrayItems::Structs { items: struct_items, .. },
+                ..
+            } = &mut prop.value
+            {
+                for item_props in struct_items.iter_mut() {
+                    let current_slot: i32 = item_props
+                        .iter()
+                        .find(|p| p.name == "SlotIndex")
+                        .and_then(|p| if let PropertyValue::Int(v) = &p.value { Some(*v) } else { None })
+                        .unwrap_or(-1);
+
+                    if current_slot == slot_index as i32 {
+                        for p in item_props.iter_mut() {
+                            match p.name.as_str() {
+                                "StaticItemDataRowName" | "ItemRowName" => {
+                                    p.value = PropertyValue::Name(item_key.to_string());
+                                }
+                                "StackCount" | "ItemCount" => {
+                                    p.value = PropertyValue::Int(quantity as i32);
+                                }
+                                _ => {}
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+                // Slot not found — append a new slot
+                let new_slot = vec![
+                    Property {
+                        name: "SlotIndex".to_string(),
+                        value: PropertyValue::Int(slot_index as i32),
+                    },
+                    Property {
+                        name: "StaticItemDataRowName".to_string(),
+                        value: PropertyValue::Name(item_key.to_string()),
+                    },
+                    Property {
+                        name: "StackCount".to_string(),
+                        value: PropertyValue::Int(quantity as i32),
+                    },
+                ];
+                struct_items.push(new_slot);
+                return Ok(());
+            }
+        }
+        if let PropertyValue::Struct { properties: inner, .. } = &mut prop.value {
+            if update_inventory_slot_in_props(inner, slot_index, item_key, quantity).is_ok() {
+                return Ok(());
+            }
+        }
+    }
+    Err(format!("Inventory array not found in component {}", slot_index))
+}
+
+#[tauri::command]
+pub fn delete_inventory_slot(
+    prospect_id: String,
+    component_idx: usize,
+    slot_index: u32,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    prospect
+        .blob
+        .parse_component(component_idx)
+        .map_err(|e| e.to_string())?;
+
+    let component = &mut prospect.blob.components[component_idx];
+    if let Some(props) = &mut component.parsed {
+        delete_inventory_slot_in_props(props, slot_index);
+        component.dirty = true;
+    }
+    Ok(())
+}
+
+fn delete_inventory_slot_in_props(properties: &mut Vec<Property>, slot_index: u32) {
+    for prop in properties.iter_mut() {
+        if prop.name == "SavedInventories" || prop.name == "Items" {
+            if let PropertyValue::Array {
+                items: ArrayItems::Structs { items: struct_items, .. },
+                ..
+            } = &mut prop.value
+            {
+                struct_items.retain(|item_props| {
+                    let current_slot: i32 = item_props
+                        .iter()
+                        .find(|p| p.name == "SlotIndex")
+                        .and_then(|p| if let PropertyValue::Int(v) = &p.value { Some(*v) } else { None })
+                        .unwrap_or(-1);
+                    current_slot != slot_index as i32
+                });
+                return;
+            }
+        }
+        if let PropertyValue::Struct { properties: inner, .. } = &mut prop.value {
+            delete_inventory_slot_in_props(inner, slot_index);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn add_inventory_item(
+    prospect_id: String,
+    component_idx: usize,
+    item_key: String,
+    quantity: u32,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut state = state.lock().unwrap();
+    let prospect = state
+        .open_prospects
+        .get_mut(&prospect_id)
+        .ok_or_else(|| format!("Prospect '{}' not loaded", prospect_id))?;
+
+    prospect
+        .blob
+        .parse_component(component_idx)
+        .map_err(|e| e.to_string())?;
+
+    let component = &mut prospect.blob.components[component_idx];
+    if let Some(props) = &mut component.parsed {
+        add_item_to_props(props, &item_key, quantity)?;
+        component.dirty = true;
+    }
+    Ok(())
+}
+
+fn add_item_to_props(
+    properties: &mut Vec<Property>,
+    item_key: &str,
+    quantity: u32,
+) -> Result<(), String> {
+    for prop in properties.iter_mut() {
+        if prop.name == "SavedInventories" || prop.name == "Items" {
+            if let PropertyValue::Array {
+                items: ArrayItems::Structs { items: struct_items, .. },
+                ..
+            } = &mut prop.value
+            {
+                let max_slot = struct_items
+                    .iter()
+                    .filter_map(|item_props| {
+                        item_props
+                            .iter()
+                            .find(|p| p.name == "SlotIndex")
+                            .and_then(|p| if let PropertyValue::Int(v) = &p.value { Some(*v) } else { None })
+                    })
+                    .max()
+                    .unwrap_or(-1);
+
+                let new_slot_idx = max_slot + 1;
+                let new_slot = vec![
+                    Property {
+                        name: "SlotIndex".to_string(),
+                        value: PropertyValue::Int(new_slot_idx),
+                    },
+                    Property {
+                        name: "StaticItemDataRowName".to_string(),
+                        value: PropertyValue::Name(item_key.to_string()),
+                    },
+                    Property {
+                        name: "StackCount".to_string(),
+                        value: PropertyValue::Int(quantity as i32),
+                    },
+                ];
+                struct_items.push(new_slot);
+                return Ok(());
+            }
+        }
+        if let PropertyValue::Struct { properties: inner, .. } = &mut prop.value {
+            if add_item_to_props(inner, item_key, quantity).is_ok() {
+                return Ok(());
+            }
+        }
+    }
+    Err("Inventory array not found in component".to_string())
+}
+
+fn search_properties(
+    properties: &[Property],
+    query: &str,
+    component_name: &str,
+    component_class: &str,
+    component_idx: usize,
+    prefix: String,
+    hits: &mut Vec<SearchHit>,
+) {
+    for prop in properties {
+        if hits.len() >= 200 {
+            return;
+        }
+        let path = if prefix.is_empty() {
+            prop.name.clone()
+        } else {
+            format!("{}.{}", prefix, prop.name)
+        };
+
+        let value_str = property_value_to_string(&prop.value);
+
+        let name_matches = prop.name.to_lowercase().contains(query);
+        let value_matches = value_str.to_lowercase().contains(query);
+
+        if name_matches || value_matches {
+            hits.push(SearchHit {
+                component_idx,
+                component_name: component_name.to_string(),
+                component_class: component_class.to_string(),
+                property_path: path.clone(),
+                value_preview: value_str.chars().take(80).collect(),
+            });
+        }
+
+        // Recurse into nested structures
+        match &prop.value {
+            PropertyValue::Struct { properties: inner, .. } => {
+                search_properties(inner, query, component_name, component_class, component_idx, path, hits);
+            }
+            PropertyValue::Array { items, .. } => {
+                match items {
+                    ArrayItems::Structs { items: struct_items, .. } => {
+                        for (i, item_props) in struct_items.iter().enumerate() {
+                            let item_path = format!("{}[{}]", path, i);
+                            search_properties(item_props, query, component_name, component_class, component_idx, item_path, hits);
+                        }
+                    }
+                    ArrayItems::Names(names) => {
+                        for (i, name) in names.iter().enumerate() {
+                            if name.to_lowercase().contains(query) {
+                                hits.push(SearchHit {
+                                    component_idx,
+                                    component_name: component_name.to_string(),
+                                    component_class: component_class.to_string(),
+                                    property_path: format!("{}[{}]", path, i),
+                                    value_preview: name.chars().take(80).collect(),
+                                });
+                            }
+                        }
+                    }
+                    ArrayItems::Strs(strs) => {
+                        for (i, s) in strs.iter().enumerate() {
+                            if s.to_lowercase().contains(query) {
+                                hits.push(SearchHit {
+                                    component_idx,
+                                    component_name: component_name.to_string(),
+                                    component_class: component_class.to_string(),
+                                    property_path: format!("{}[{}]", path, i),
+                                    value_preview: s.chars().take(80).collect(),
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            PropertyValue::Map { entries, .. } => {
+                for (i, entry) in entries.iter().enumerate() {
+                    let entry_path = format!("{}.entry[{}]", path, i);
+                    let key_str = property_value_to_string(&entry.key);
+                    let val_str = property_value_to_string(&entry.value);
+                    if key_str.to_lowercase().contains(query) || val_str.to_lowercase().contains(query) {
+                        hits.push(SearchHit {
+                            component_idx,
+                            component_name: component_name.to_string(),
+                            component_class: component_class.to_string(),
+                            property_path: entry_path,
+                            value_preview: format!("{} = {}", key_str, val_str).chars().take(80).collect(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn property_value_to_string(value: &PropertyValue) -> String {
+    match value {
+        PropertyValue::Int(v) => v.to_string(),
+        PropertyValue::Int64(v) => v.to_string(),
+        PropertyValue::UInt32(v) => v.to_string(),
+        PropertyValue::UInt64(v) => v.to_string(),
+        PropertyValue::Float(v) => format!("{:.4}", v),
+        PropertyValue::Double(v) => format!("{:.4}", v),
+        PropertyValue::Bool(v) => v.to_string(),
+        PropertyValue::Str(v) | PropertyValue::Name(v) => v.clone(),
+        PropertyValue::Enum { enum_value, .. } => enum_value.clone(),
+        PropertyValue::Byte { byte_value: Some(b), .. } => b.to_string(),
+        PropertyValue::Byte { enum_value: Some(e), .. } => e.clone(),
+        PropertyValue::Byte { .. } => String::new(),
+        PropertyValue::Struct { struct_type, .. } => format!("{{Struct:{}}}", struct_type),
+        PropertyValue::Array { inner_type, .. } => format!("[Array:{}]", inner_type),
+        PropertyValue::Map { key_type, value_type, .. } => format!("{{Map:{}->{}}}", key_type, value_type),
+        PropertyValue::Raw { prop_type, .. } => format!("[Raw:{}]", prop_type),
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// Server Management
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn detect_server() -> Option<String> {
+    server::steam::detect_server_exe()
+}
+
+#[tauri::command]
+pub fn get_server_config(
+    state: State<'_, Mutex<AppState>>,
+) -> server::ServerConfig {
+    state.lock().unwrap().server_config.clone()
+}
+
+#[tauri::command]
+pub fn set_server_config(
+    config: server::ServerConfig,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    state.lock().unwrap().server_config = config;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn start_server(
+    prospect_id: String,
+    state: State<'_, Mutex<AppState>>,
+    server_state: State<'_, Arc<Mutex<server::ServerState>>>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let (exe_path, config) = {
+        let state = state.lock().unwrap();
+        let exe = state
+            .server_config
+            .executable_path
+            .clone()
+            .or_else(|| server::steam::detect_server_exe())
+            .ok_or_else(|| {
+                "Server executable not found. Install ICARUS Dedicated Server via Steam."
+                    .to_string()
+            })?;
+        (exe, state.server_config.clone())
+    };
+
+    server::launcher::start_server(
+        &config,
+        &exe_path,
+        &prospect_id,
+        Arc::clone(server_state.inner()),
+        app_handle,
+    )
+}
+
+#[tauri::command]
+pub fn stop_server(
+    server_state: State<'_, Arc<Mutex<server::ServerState>>>,
+) -> Result<(), String> {
+    server::launcher::stop_server(Arc::clone(server_state.inner()))
+}
+
+#[tauri::command]
+pub fn get_server_status(
+    server_state: State<'_, Arc<Mutex<server::ServerState>>>,
+) -> server::ServerStatusResponse {
+    let state = server_state.lock().unwrap();
+    server::ServerStatusResponse {
+        status: state.status.clone(),
+        pid: state.pid,
+        uptime_secs: state.start_time.map(|t| t.elapsed().as_secs()),
+        log_lines: state.log_lines.clone(),
+    }
 }

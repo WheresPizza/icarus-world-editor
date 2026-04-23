@@ -76,6 +76,76 @@ export interface AppConfig {
   auto_backup_on_save: boolean;
 }
 
+export interface SearchHit {
+  component_idx: number;
+  component_name: string;
+  component_class: string;
+  property_path: string;
+  value_preview: string;
+}
+
+export interface FieldDiff {
+  field: string;
+  old_value: string;
+  new_value: string;
+}
+
+export interface PropertyDiff {
+  path: string;
+  old_value: string;
+  new_value: string;
+}
+
+export interface ComponentDiff {
+  component_name: string;
+  component_class: string;
+  property_changes: PropertyDiff[];
+}
+
+export interface ProspectDiff {
+  metadata_changes: FieldDiff[];
+  added_components: string[];
+  removed_components: string[];
+  modified_components: ComponentDiff[];
+}
+
+export interface ItemSlot {
+  slot_index: number;
+  item_key: string;
+  quantity: number;
+  durability: number | null;
+}
+
+export interface InventoryComponent {
+  component_idx: number;
+  component_name: string;
+  component_class: string;
+  slots: ItemSlot[];
+}
+
+export interface InventoryView {
+  components: InventoryComponent[];
+}
+
+// Server management
+export type ServerStatusEnum = "Stopped" | "Starting" | "Running";
+
+export interface ServerConfig {
+  executable_path: string | null;
+  server_name: string;
+  port: number;
+  max_players: number;
+  password: string | null;
+  admin_password: string | null;
+}
+
+export interface ServerStatusResponse {
+  status: ServerStatusEnum;
+  pid: number | null;
+  uptime_secs: number | null;
+  log_lines: string[];
+}
+
 // View state
 export type ViewMode = "library" | "detail" | "component";
 

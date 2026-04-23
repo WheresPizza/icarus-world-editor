@@ -29,4 +29,9 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Registry",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
